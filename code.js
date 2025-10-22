@@ -540,19 +540,11 @@ function buildFilePath(target, includeSize24Flag, options = {}) {
 }
 
 function determineArchiveName(targets) {
-  const bases = [];
-
-  for (const target of targets) {
-    if (!target || !target.baseName) {
-      continue;
-    }
-    if (bases.indexOf(target.baseName) === -1) {
-      bases.push(target.baseName);
-    }
-  }
-
-  const base = bases.length === 1 ? bases[0] : 'EXPORT';
-  return base + '_PNG.zip';
+  const now = new Date();
+  const year = String(now.getFullYear());
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return year + '_' + month + '_' + day + '_VCL_EXPORT_PNG.zip';
 }
 
 function determineBaseName(node) {
