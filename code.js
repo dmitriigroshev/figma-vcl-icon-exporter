@@ -60,19 +60,26 @@ const UI_HTML = `
 </style>
 </head>
 <body>
-  <h1>Экспорт вариантов</h1>
-  <p id="status">Подготовка экспорта…</p>
+  <h1>Export Variants</h1>
+  <p id="status">Preparing export…</p>
+  <label class="option">
+    <span>Format:</span>
+    <select id="formatSelect">
+      <option value="PNG" selected>PNG</option>
+      <option value="SVG">SVG</option>
+    </select>
+  </label>
   <label class="option">
     <input type="checkbox" id="includeSize24" />
-    <span>Добавлять размер 24 в имя файла</span>
+    <span>Include size 24 in file name</span>
   </label>
-  <label class="option">
+  <label class="option" id="upscale128Option">
     <input type="checkbox" id="upscale128" checked />
-    <span>Создать дополнительный размер 128 из размера 32</span>
+    <span>Create additional size 128 from size 32</span>
   </label>
   <div class="actions">
-    <button id="save" disabled>Сохранить ZIP</button>
-    <button id="cancel" class="secondary">Отмена</button>
+    <button id="save" disabled>Save ZIP</button>
+    <button id="cancel" class="secondary">Cancel</button>
   </div>
 <script>
 const statusEl = document.getElementById('status');
@@ -80,10 +87,13 @@ const saveBtn = document.getElementById('save');
 const cancelBtn = document.getElementById('cancel');
 const includeSize24Checkbox = document.getElementById('includeSize24');
 const upscale128Checkbox = document.getElementById('upscale128');
+const upscale128Option = document.getElementById('upscale128Option');
+const formatSelect = document.getElementById('formatSelect');
 let filesQueue = [];
 let archiveName = 'EXPORT.zip';
 let includeSize24 = false;
 let upscale128 = true;
+let exportFormat = 'PNG';
 
 window.onmessage = (event) => {
   const message = event.data.pluginMessage;
@@ -103,14 +113,19 @@ window.onmessage = (event) => {
     if (upscale128Checkbox.checked !== upscale128) {
       upscale128Checkbox.checked = upscale128;
     }
+    exportFormat = payload.exportFormat || 'PNG';
+    if (formatSelect.value !== exportFormat) {
+      formatSelect.value = exportFormat;
+    }
+    updateUpscale128Visibility();
     const count = filesQueue.length;
     statusEl.textContent = count
-      ? 'Готово к экспорту ' + count + ' файлов. Нажмите «Сохранить ZIP».'
-      : 'Нет данных для экспорта.';
+      ? 'Ready to export ' + count + ' files. Click "Save ZIP".'
+      : 'No data to export.';
     saveBtn.disabled = count === 0;
     cancelBtn.disabled = count === 0;
   } else if (message.type === 'EXPORT_FAILED') {
-    statusEl.textContent = 'Ошибка экспорта. Проверьте консоль.';
+    statusEl.textContent = 'Export error. Check console.';
     saveBtn.disabled = true;
     cancelBtn.disabled = false;
   }
@@ -118,7 +133,7 @@ window.onmessage = (event) => {
 
 includeSize24Checkbox.addEventListener('change', () => {
   const value = includeSize24Checkbox.checked;
-  statusEl.textContent = 'Обновляю список файлов…';
+  statusEl.textContent = 'Updating file list…';
   saveBtn.disabled = true;
   cancelBtn.disabled = true;
   includeSize24 = value;
@@ -127,12 +142,30 @@ includeSize24Checkbox.addEventListener('change', () => {
 
 upscale128Checkbox.addEventListener('change', () => {
   const value = upscale128Checkbox.checked;
-  statusEl.textContent = 'Обновляю список файлов…';
+  statusEl.textContent = 'Updating file list…';
   saveBtn.disabled = true;
   cancelBtn.disabled = true;
   upscale128 = value;
   parent.postMessage({ pluginMessage: { type: 'TOGGLE_UPSCALE_128', value } }, '*');
 });
+
+formatSelect.addEventListener('change', () => {
+  const value = formatSelect.value;
+  statusEl.textContent = 'Updating file list…';
+  saveBtn.disabled = true;
+  cancelBtn.disabled = true;
+  exportFormat = value;
+  updateUpscale128Visibility();
+  parent.postMessage({ pluginMessage: { type: 'CHANGE_FORMAT', value } }, '*');
+});
+
+function updateUpscale128Visibility() {
+  if (exportFormat === 'SVG') {
+    upscale128Option.style.display = 'none';
+  } else {
+    upscale128Option.style.display = 'flex';
+  }
+}
 
 saveBtn.addEventListener('click', () => {
   if (!filesQueue.length) {
@@ -141,11 +174,11 @@ saveBtn.addEventListener('click', () => {
 
   saveBtn.disabled = true;
   cancelBtn.disabled = true;
-  statusEl.textContent = 'Формирую ZIP архив…';
+  statusEl.textContent = 'Creating ZIP archive…';
 
   try {
     const archive = createZipArchive(filesQueue);
-    statusEl.textContent = 'Готовлю загрузку…';
+    statusEl.textContent = 'Preparing download…';
 
     const blob = new Blob([archive], { type: 'application/zip' });
     const url = URL.createObjectURL(blob);
@@ -157,11 +190,11 @@ saveBtn.addEventListener('click', () => {
     link.remove();
     URL.revokeObjectURL(url);
 
-    statusEl.textContent = 'Архив сохранён.';
+    statusEl.textContent = 'Archive saved.';
     parent.postMessage({ pluginMessage: { type: 'BATCH_EXPORTED' } }, '*');
   } catch (error) {
     console.error(error);
-    statusEl.textContent = 'Не удалось сформировать архив.';
+    statusEl.textContent = 'Failed to create archive.';
     saveBtn.disabled = false;
     cancelBtn.disabled = false;
     parent.postMessage(
@@ -185,7 +218,7 @@ function createZipArchive(items) {
   const date = getDosDate(now);
 
   for (const item of items) {
-    const fileName = ensurePngExtension(String(item.fileName || 'FILE'));
+    const fileName = String(item.fileName || 'FILE');
     const nameBytes = encoder.encode(fileName);
     const data = normalizeBytes(item.bytes);
     const crc = crc32(data);
@@ -271,8 +304,9 @@ function createZipArchive(items) {
   return output;
 }
 
-function ensurePngExtension(name) {
-  return name.toLowerCase().endsWith('.png') ? name : name + '.png';
+function ensureExtension(name, ext) {
+  const lowerExt = '.' + ext.toLowerCase();
+  return name.toLowerCase().endsWith(lowerExt) ? name : name + '.' + ext.toLowerCase();
 }
 
 function normalizeBytes(bytes) {
@@ -330,6 +364,7 @@ figma.showUI(UI_HTML, { width: 320, height: 150 });
 const pluginState = {
   includeSize24: false,
   upscale128: true,
+  exportFormat: 'PNG',
   targets: [],
   isPreparing: false,
   pendingRefresh: false,
@@ -337,12 +372,12 @@ const pluginState = {
 
 figma.ui.onmessage = (msg) => {
   if (msg.type === 'BATCH_EXPORTED') {
-    figma.closePlugin('Архив сохранён.');
+    figma.closePlugin('Archive saved.');
   } else if (msg.type === 'DOWNLOAD_FAILED') {
     console.error(msg.message);
-    figma.notify('Не удалось сохранить архив.');
+    figma.notify('Failed to save archive.');
   } else if (msg.type === 'CANCEL') {
-    figma.closePlugin('Экспорт отменён.');
+    figma.closePlugin('Export cancelled.');
   } else if (msg.type === 'TOGGLE_INCLUDE_24') {
     pluginState.includeSize24 = Boolean(msg.value);
     if (!pluginState.targets.length) {
@@ -363,12 +398,29 @@ figma.ui.onmessage = (msg) => {
     } else {
       prepareAndSendExports({ notifyUser: false });
     }
+  } else if (msg.type === 'CHANGE_FORMAT') {
+    pluginState.exportFormat = msg.value === 'SVG' ? 'SVG' : 'PNG';
+    // Clear cached exports when format changes
+    for (const target of pluginState.targets) {
+      target.bytes = null;
+      target.byteArray = null;
+      target.bytes128 = null;
+      target.byteArray128 = null;
+    }
+    if (!pluginState.targets.length) {
+      return;
+    }
+    if (pluginState.isPreparing) {
+      pluginState.pendingRefresh = true;
+    } else {
+      prepareAndSendExports({ notifyUser: false });
+    }
   }
 };
 
 run().catch((error) => {
   console.error(error);
-  figma.notify('Не удалось экспортировать варианты.');
+  figma.notify('Failed to export variants.');
   figma.closePlugin();
 });
 
@@ -376,7 +428,7 @@ async function run() {
   const targets = collectVariantTargets(figma.currentPage.selection);
 
   if (!targets.length) {
-    figma.notify('Выберите компонент или компонент-сет с вариантами.');
+    figma.notify('Select a component or component set with variants.');
     figma.closePlugin();
     return;
   }
@@ -396,6 +448,7 @@ async function prepareAndSendExports({ notifyUser = false } = {}) {
         archiveName: 'EXPORT.zip',
         includeSize24: pluginState.includeSize24,
         upscale128: pluginState.upscale128,
+        exportFormat: pluginState.exportFormat,
       },
     });
     return;
@@ -410,28 +463,31 @@ async function prepareAndSendExports({ notifyUser = false } = {}) {
 
   try {
     if (notifyUser) {
-      figma.notify('Готовлю ' + String(pluginState.targets.length) + ' файлов к экспорту…');
+      figma.notify('Preparing ' + String(pluginState.targets.length) + ' files for export…');
     }
 
     const prepared = [];
+    const isSvg = pluginState.exportFormat === 'SVG';
+    const format = isSvg ? 'SVG' : 'PNG';
 
     for (const target of pluginState.targets) {
       if (!target.bytes) {
-        target.bytes = await target.node.exportAsync({ format: 'PNG' });
+        target.bytes = await target.node.exportAsync({ format });
         target.byteArray = null;
       }
       if (!target.byteArray) {
         target.byteArray = Array.from(target.bytes);
       }
 
-      const filePath = buildFilePath(target, pluginState.includeSize24);
+      const filePath = buildFilePath(target, pluginState.includeSize24, { format });
       prepared.push({
         fileName: filePath,
         bytes: target.byteArray,
       });
 
+      // Upscale128 only applies to PNG format
       const numericSize = Number(target.size);
-      if (pluginState.upscale128 && Number.isFinite(numericSize) && numericSize === 32) {
+      if (!isSvg && pluginState.upscale128 && Number.isFinite(numericSize) && numericSize === 32) {
         if (!target.bytes128) {
           target.bytes128 = await target.node.exportAsync({
             format: 'PNG',
@@ -445,13 +501,14 @@ async function prepareAndSendExports({ notifyUser = false } = {}) {
         prepared.push({
           fileName: buildFilePath(target, pluginState.includeSize24, {
             sizeOverride: '128',
+            format: 'PNG',
           }),
           bytes: target.byteArray128,
         });
       }
     }
 
-    const archiveName = determineArchiveName(pluginState.targets);
+    const archiveName = determineArchiveName(pluginState.targets, pluginState.exportFormat);
 
     figma.ui.postMessage({
       type: 'PREPARED_BATCH',
@@ -460,15 +517,16 @@ async function prepareAndSendExports({ notifyUser = false } = {}) {
         archiveName,
         includeSize24: pluginState.includeSize24,
         upscale128: pluginState.upscale128,
+        exportFormat: pluginState.exportFormat,
       },
     });
 
     if (notifyUser) {
-      figma.notify('Файлы готовы. Нажмите «Сохранить ZIP» в окне плагина.');
+      figma.notify('Files ready. Click "Save ZIP" in the plugin window.');
     }
   } catch (error) {
     console.error(error);
-    figma.notify('Не удалось подготовить экспорт.');
+    figma.notify('Failed to prepare export.');
     figma.ui.postMessage({
       type: 'EXPORT_FAILED',
       message: String(error),
@@ -529,7 +587,8 @@ function buildFilePath(target, includeSize24Flag, options = {}) {
   const size = options.sizeOverride || target.size || '';
   const shouldIncludeSize = size && (size !== '24' || includeSize24Flag);
   const namePart = shouldIncludeSize ? target.baseName + size : target.baseName;
-  const fileName = namePart + '_PNG';
+  const format = options.format || 'PNG';
+  const fileName = namePart + '_' + format + '.' + format.toLowerCase();
   const segments = target.pathSegments && target.pathSegments.length
     ? target.pathSegments.map(sanitizeFolderName)
     : [];
@@ -539,12 +598,12 @@ function buildFilePath(target, includeSize24Flag, options = {}) {
   return fileName;
 }
 
-function determineArchiveName(targets) {
+function determineArchiveName(targets, format) {
   const now = new Date();
   const year = String(now.getFullYear());
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
-  return year + '_' + month + '_' + day + '_VCL_EXPORT_PNG.zip';
+  return year + '_' + month + '_' + day + '_VCL_EXPORT_' + format + '.zip';
 }
 
 function determineBaseName(node) {
@@ -597,7 +656,7 @@ function sanitizeFolderName(name) {
     .replace(/^\/*/, '')
     .replace(/\/*$/, '')
     .replace(/\s+/g, '_')
-    .replace(/[^A-Za-z0-9_\-]/g, '_');
+    .replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
 function stripVariantSuffix(name) {
